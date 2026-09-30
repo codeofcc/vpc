@@ -18,6 +18,7 @@
 
 
 #include "ffmpeg_dxva2.h"
+#ifdef _WIN32
 #include "libavcodec/dxva2.h"
 #include "libavutil/avassert.h"
 #include "libavutil/buffer.h"
@@ -821,3 +822,4 @@ int dxva2_retrieve_data_call(AVCodecContext* s, AVFrame* frame)
 {
 	return dxva2_retrieve_data(s, frame);
 }
+#endif

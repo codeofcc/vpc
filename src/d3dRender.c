@@ -1,4 +1,5 @@
 #include "D3DRender.h"
+#ifdef _WIN32
 #include "libavformat/avformat.h"
 #include <d3d9.h>
 #include "d3dx9.h"
@@ -292,3 +293,4 @@ int d3dRender_present(D3DRender p, unsigned char* data[8], int linesize[8])
 	}
 	return 0;
 }
+#endif

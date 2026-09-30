@@ -80,6 +80,7 @@ list(APPEND LIBRARIES
 
 file(GLOB_RECURSE SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/utils/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 

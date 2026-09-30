@@ -18,7 +18,7 @@
 
 #ifndef FFMPEG_DXVA2_H
 #define FFMPEG_DXVA2_H
-
+#ifdef _WIN32
 #include <Windows.h>
 
 
@@ -144,5 +144,5 @@ typedef struct InputStream {
 int dxva2_init(AVCodecContext *s, HWND hwnd);
 void dxva2_uninit2(InputStream* ist);
 int dxva2_retrieve_data_call(AVCodecContext *s, AVFrame *frame);
-
+#endif
 #endif /* FFMPEG_DXVA2_H */

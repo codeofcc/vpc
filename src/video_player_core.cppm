@@ -11,6 +11,8 @@ export module video_player_core;
 export using ::av_frame_clone;
 export using ::av_frame_free;
 
+export using ::AVFrame;
+
 export using ::AVPixelFormat;
 export using ::Play;
 export using ::DisplayEventArgs;
