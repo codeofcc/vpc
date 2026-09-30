@@ -87,6 +87,7 @@ add_library(${PROJECT_NAME} STATIC ${SOURCES})
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+
 target_compile_options(${PROJECT_NAME} PRIVATE -pthread)
 find_package(Threads REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads
@@ -98,12 +99,22 @@ target_sources(${PROJECT_NAME}
     PUBLIC
     FILE_SET CXX_MODULES
     FILES
-    "include/video_player_core.cppm" # ✅ 更新为新的文件名
+    "src/video_player_core.cppm" # ✅ 更新为新的文件名
 )
 
 
 
 message(STATUS "CMAKE_HOST_SYSTEM_NAME:${CMAKE_HOST_SYSTEM_NAME}")
+
+
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    target_link_libraries(${PROJECT_NAME} PUBLIC
+        dxva2
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE COBJMACROS)
+endif()
+
 
 
 
@@ -154,6 +165,9 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
 
     list(APPEND CMAKE_MODULE_PATH "${VCPKG_DIR}/installed/${VCPKG_TARGET_TRIPLET}/share/ffmpeg")
     list(APPEND CMAKE_MODULE_PATH "${VCPKG_DIR}/installed/${VCPKG_TARGET_TRIPLET}/share/sdl2")
+    list(APPEND CMAKE_MODULE_PATH "${VCPKG_DIR}/installed/${VCPKG_TARGET_TRIPLET}/share/soundtouch")
+
+
     list(APPEND CMAKE_PREFIX_PATH "${VCPKG_DIR}/installed/${VCPKG_TARGET_TRIPLET}")
     set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
     set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
@@ -180,6 +194,19 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
 
     )
 
+    execute_process(
+        COMMAND "${VCPKG_DIR}/vcpkg.exe" install "soundtouch:${VCPKG_TARGET_TRIPLET}"
+        WORKING_DIRECTORY "${VCPKG_DIR}"
+        COMMAND_ECHO STDOUT
+        COMMAND_ERROR_IS_FATAL ANY
+    )
+
+    find_package(SoundTouch CONFIG REQUIRED)
+
+
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        SoundTouch::SoundTouch
+    )
 
 
 else()
@@ -270,7 +297,7 @@ else()
             "${FFMPEG_SOURCE_DIR}"
         )
 
- message(STATUS "[OS] Target OS matches host: ${CMAKE_HOST_SYSTEM_PROCESSOR} ${CMAKE_SYSTEM_PROCESSOR}")
+        message(STATUS "[OS] Target OS matches host: ${CMAKE_HOST_SYSTEM_PROCESSOR} ${CMAKE_SYSTEM_PROCESSOR}")
         if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL CMAKE_SYSTEM_PROCESSOR)
             message(STATUS "[OS] Target OS matches host: ${CMAKE_SYSTEM_NAME}")
             set(FFMPEG_CROSS_COMPILE "--disable-cross-compile")
@@ -396,7 +423,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${INCLUDE_DIRS}
 )
 target_include_directories(${PROJECT_NAME} PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/D3D/include"
+)
+
+target_include_directories(${PROJECT_NAME} PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
     CXX_VISIBILITY_PRESET hidden)

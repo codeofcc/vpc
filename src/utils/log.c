@@ -1,10 +1,10 @@
-#include "utils/log.h"
+#include "log.h"
 #include <string.h>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include "utils/thread.h"
+#include "thread.h"
 #include <stdint.h>
 #include <signal.h>
 #include <inttypes.h>
