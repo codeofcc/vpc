@@ -206,15 +206,6 @@ typedef struct VideoState
 	struct AudioParams audio_src;
 	struct AudioParams audio_tgt;
 	struct SwrContext *swr_ctx;
-	enum ShowMode
-	{
-		SHOW_MODE_NONE = -1,
-		SHOW_MODE_VIDEO = 0,
-		SHOW_MODE_WAVES,
-		SHOW_MODE_RDFT,
-		SHOW_MODE_NB
-	} show_mode;
-	double last_vis_time;
 	int subtitle_stream;
 	AVStream *subtitle_st;
 	PacketQueue subtitleq;
@@ -227,7 +218,6 @@ typedef struct VideoState
 	int eof;
 	char *filename;
 	int step;
-	int last_video_stream, last_audio_stream, last_subtitle_stream;
 	SDL_cond *continue_read_thread;
 	void *hwnd;
 	int audio_disable;
@@ -249,7 +239,6 @@ typedef struct VideoState
 	const char *audio_codec_name;
 	const char *subtitle_codec_name;
 	const char *video_codec_name;
-	double rdftspeed;
 	int find_stream_info;
 	/* current context */
 	int64_t audio_callback_time;
@@ -870,11 +859,9 @@ static void set_default_param(VideoState *s)
 	s->loop = 0;
 	s->framedrop = -1;
 	s->infinite_buffer = -1;
-	s->show_mode = SHOW_MODE_NONE;
 	s->audio_codec_name = 0;
 	s->subtitle_codec_name = 0;
 	s->video_codec_name = 0;
-	s->rdftspeed = 0.02;
 	s->find_stream_info = 1;
 	s->audio_callback_time = 0;
 	av_init_packet(&s->flush_pkt);
@@ -917,11 +904,6 @@ static void stream_close(VideoState *is)
 	if (is->ic)
 	{
 		avformat_close_input(&is->ic);
-
-		if (is->ic != NULL)
-		{
-			printf("avformat close input error\n");
-		}
 	}
 	packet_queue_destroy(&is->videoq);
 	packet_queue_destroy(&is->audioq);
@@ -964,7 +946,6 @@ static void stream_close(VideoState *is)
 		array_unmake(is->video_scales);
 	}
 
-	is->abort_request = 0;
 	void *hwnd = is->hwnd;
 	int loop = is->loop;
 	int hwaccel = is->hwaccel;
@@ -1309,24 +1290,10 @@ static void video_refresh(void *opaque, double *remaining_time)
 	if (!is->paused && get_master_sync_type(is) == AV_SYNC_EXTERNAL_CLOCK && is->realtime)
 		check_external_clock_speed(is);
 
-	if (is->show_mode != SHOW_MODE_VIDEO && is->audio_st)
-	{
-		time = av_gettime_relative() / 1000000.0;
-		if (is->force_refresh || is->last_vis_time + is->rdftspeed < time)
-		{
-			video_display(is);
-			is->last_vis_time = time;
-		}
-		*remaining_time = FFMIN(*remaining_time, is->last_vis_time + is->rdftspeed - time);
-	}
-
 	if (is->video_st)
 	{
 	retry:
-		if (frame_queue_nb_remaining(&is->pictq) == 0)
-		{
-		}
-		else
+		if (frame_queue_nb_remaining(&is->pictq) > 0)
 		{
 			double last_duration, duration, delay;
 			Frame *vp, *lastvp;
@@ -1405,7 +1372,7 @@ static void video_refresh(void *opaque, double *remaining_time)
 		}
 
 	display:
-		if (is->force_refresh && is->show_mode == SHOW_MODE_VIDEO && is->pictq.rindex_shown)
+		if (is->force_refresh && is->pictq.rindex_shown)
 			video_display(is);
 	}
 	is->force_refresh = 0;
@@ -1863,7 +1830,6 @@ static int audio_open(void *opaque, int64_t wanted_channel_layout, int wanted_nb
 		while (next_sample_rate_idx && next_sample_rates[next_sample_rate_idx] >= wanted_spec.freq)
 			next_sample_rate_idx--;
 		wanted_spec.format = AUDIOD_EVICE_FORMAT;
-		wanted_spec.silence = 0;
 		wanted_spec.samples = FFMAX(SDL_AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(wanted_spec.freq / SDL_AUDIO_MAX_CALLBACKS_PER_SEC));
 		wanted_spec.callback = sdl_audio_callback_sum;
 		wanted_spec.userdata = opaque;
@@ -1957,19 +1923,15 @@ static int stream_component_open(VideoState *is, int stream_index)
 
 	avctx->pkt_timebase = ic->streams[stream_index]->time_base;
 	codec = avcodec_find_decoder(avctx->codec_id);
-	avctx->pix_fmt = 0;
 	switch (avctx->codec_type)
 	{
 	case AVMEDIA_TYPE_AUDIO:
-		is->last_audio_stream = stream_index;
 		forced_codec_name = is->audio_codec_name;
 		break;
 	case AVMEDIA_TYPE_SUBTITLE:
-		is->last_subtitle_stream = stream_index;
 		forced_codec_name = is->subtitle_codec_name;
 		break;
 	case AVMEDIA_TYPE_VIDEO:
-		is->last_video_stream = stream_index;
 		forced_codec_name = is->video_codec_name;
 		break;
 	}
@@ -2127,9 +2089,9 @@ static int read_thread(void *arg)
 		goto fail;
 	}
 	memset(st_index, -1, sizeof(st_index));
-	is->last_video_stream = is->video_stream = -1;
-	is->last_audio_stream = is->audio_stream = -1;
-	is->last_subtitle_stream = is->subtitle_stream = -1;
+	is->video_stream = -1;
+	is->audio_stream = -1;
+	is->subtitle_stream = -1;
 	is->eof = 0;
 
 	ic = avformat_alloc_context();
@@ -2199,7 +2161,6 @@ static int read_thread(void *arg)
 		ic->flags |= AVFMT_FLAG_GENPTS;
 	if (is->find_stream_info)
 	{
-		int orig_nb_streams = ic->nb_streams;
 		err = avformat_find_stream_info(ic, NULL);
 		if (err < 0)
 		{
@@ -2268,9 +2229,6 @@ static int read_thread(void *arg)
 	{
 		ret = stream_component_open(is, st_index[AVMEDIA_TYPE_VIDEO]);
 	}
-
-	if (is->show_mode == SHOW_MODE_NONE)
-		is->show_mode = ret >= 0 ? SHOW_MODE_VIDEO : SHOW_MODE_RDFT;
 
 	if (st_index[AVMEDIA_TYPE_SUBTITLE] >= 0)
 	{
@@ -2559,7 +2517,7 @@ static int event_loop(void *lpParameter)
 		if (remaining_time > 0.0)
 			av_usleep((int64_t)(remaining_time * 1000000.0));
 		remaining_time = REFRESH_RATE;
-		if (is->show_mode != SHOW_MODE_NONE && (!is->paused || is->force_refresh))
+		if (is->video_st && (!is->paused || is->force_refresh))
 			video_refresh(is, &remaining_time);
 	}
 	return 0;
@@ -2645,6 +2603,7 @@ BOOL WINAPI DllMain(
 	DWORD fdwReason,
 	LPVOID lpvReserved)
 {
+	(void)hinstDLL;
 	switch (fdwReason)
 	{
 	case DLL_PROCESS_ATTACH:
