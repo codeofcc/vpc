@@ -17,7 +17,6 @@
 #include "SDL_thread.h"
 #include <windows.h>
 #include "D3DRender.h"
-#include "ffmpeg_dxva2.h"
 #else
 #include "SDL2/SDL.h"
 #include "SDL2/SDL_thread.h"
@@ -280,7 +279,6 @@ typedef struct VideoState
 	enum AVPixelFormat d3d_render_format;
 
 #ifdef _WIN32
-	InputStream *ist;
 	D3DRender _d3dRender;
 #endif
 
@@ -949,15 +947,6 @@ static void stream_close(VideoState *is)
 		is->filename = NULL;
 	}
 
-#ifdef _WIN32
-	if (is->ist)
-	{
-		dxva2_uninit2(is->ist);
-		av_free(is->ist);
-		is->ist = NULL;
-	}
-#endif
-
 	av_dict_free(&is->format_opts);
 
 	if (is->speed_buf)
@@ -1117,13 +1106,6 @@ static void video_display(VideoState *is)
 		if (isHandled)
 			return;
 	}
-#ifdef _WIN32
-	if (vp->format == AV_PIX_FMT_DXVA2_VLD)
-	{
-		dxva2_retrieve_data_call(is->viddec.avctx, vp->frame);
-		return;
-	}
-#endif
 	if (is->hwnd)
 	{
 
@@ -1990,18 +1972,6 @@ static int audio_open(void *opaque, int64_t wanted_channel_layout, int wanted_nb
 	return audio_buf_size;
 }
 
-static enum AVPixelFormat GetHwFormat(AVCodecContext *s, const enum AVPixelFormat *pix_fmts)
-{
-#ifdef _WIN32
-	InputStream *ist = (InputStream *)s->opaque;
-	ist->active_hwaccel_id = HWACCEL_DXVA2;
-	ist->hwaccel_pix_fmt = AV_PIX_FMT_DXVA2_VLD;
-	return ist->hwaccel_pix_fmt;
-#else
-	return AV_PIX_FMT_NONE;
-#endif
-}
-
 static int stream_component_open(VideoState *is, int stream_index)
 {
 	AVFormatContext *ic = is->ic;
@@ -2076,53 +2046,10 @@ static int stream_component_open(VideoState *is, int stream_index)
 	if (stream_lowres)
 		av_dict_set_int(&opts, "lowres", stream_lowres, 0);
 
-#ifdef _WIN32
-	if (!forced_codec_name && avctx->codec_type == AVMEDIA_TYPE_VIDEO)
-	{
-		if (is->hwaccel == AC_HARDWAREACCELERATETYPE_AUTO || is->hwaccel == AC_HARDWAREACCELERATETYPE_DXVA2)
-		{
-			switch (codec->id)
-			{
-			case AV_CODEC_ID_MPEG2VIDEO:
-			case AV_CODEC_ID_H264:
-			case AV_CODEC_ID_VC1:
-			case AV_CODEC_ID_WMV3:
-			case AV_CODEC_ID_HEVC:
-			case AV_CODEC_ID_VP9:
-				avctx->thread_count = 1;
-				is->ist = av_mallocz(sizeof(InputStream));
-				is->ist->hwaccel_id = HWACCEL_AUTO;
-				is->ist->active_hwaccel_id = HWACCEL_AUTO;
-				is->ist->hwaccel_device = "dxva2";
-				is->ist->dec = codec;
-				is->ist->dec_ctx = avctx;
-				avctx->opaque = is->ist;
-				if (dxva2_init(avctx, is->hwnd) == 0)
-				{
-					avctx->get_buffer2 = is->ist->hwaccel_get_buffer;
-					avctx->get_format = GetHwFormat;
-					avctx->pix_fmt = AV_PIX_FMT_DXVA2_VLD;
-				}
-				else
-				{
-					av_free(is->ist);
-					is->ist = NULL;
-				}
-				break;
-			}
-		}
-	}
-#endif
 	if ((ret = avcodec_open2(avctx, codec, &opts)) < 0)
 	{
 		goto fail;
 	}
-#ifdef _WIN32
-	if (is->ist)
-	{
-		avctx->pix_fmt = AV_PIX_FMT_DXVA2_VLD;
-	}
-#endif
 	if ((t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX)))
 	{
 		av_log(NULL, AV_LOG_ERROR, "Option %s not found.\n", t->key);
@@ -2420,10 +2347,6 @@ static int read_thread(void *arg)
 
 	is->render_format = format;
 	if (is->render_format == AV_PIX_FMT_NONE)
-	{
-		is->render_format = AV_PIX_FMT_YUV420P;
-	}
-	if (is->render_format == AV_PIX_FMT_DXVA2_VLD && is->viddec.avctx && is->viddec.avctx->pix_fmt != AV_PIX_FMT_DXVA2_VLD)
 	{
 		is->render_format = AV_PIX_FMT_YUV420P;
 	}
