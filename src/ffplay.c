@@ -16,7 +16,6 @@
 #include "SDL.h"
 #include "SDL_thread.h"
 #include <windows.h>
-#include "D3DRender.h"
 #else
 #include "SDL2/SDL.h"
 #include "SDL2/SDL_thread.h"
@@ -276,11 +275,6 @@ typedef struct VideoState
 	cSoundTouch soundTouch;
 
 	VideoScale *video_scales;
-	enum AVPixelFormat d3d_render_format;
-
-#ifdef _WIN32
-	D3DRender _d3dRender;
-#endif
 
 } VideoState;
 SDL_AudioDeviceID devId;
@@ -1105,39 +1099,6 @@ static void video_display(VideoState *is)
 		}
 		if (isHandled)
 			return;
-	}
-	if (is->hwnd)
-	{
-
-#ifdef _WIN32
-		if (!is->_d3dRender)
-		{
-			is->d3d_render_format = vp->format;
-			is->_d3dRender = d3dRender_create(is->hwnd, vp->width, vp->height, is->d3d_render_format);
-			if (!is->_d3dRender)
-			{
-				is->d3d_render_format = AV_PIX_FMT_BGRA;
-				is->_d3dRender = d3dRender_create(is->hwnd, vp->width, vp->height, is->d3d_render_format);
-			}
-		}
-		if (!is->_d3dRender)
-		{
-			av_log(NULL, AV_LOG_ERROR, "create d3d renderer fail\n");
-			return;
-		}
-		if (is->d3d_render_format == vp->format)
-		{
-			d3dRender_present(is->_d3dRender, vp->frame->data, vp->frame->linesize);
-		}
-		else
-		{
-			AVFrame *frame = video_frame_scale(is, vp, vp->width, vp->height, is->d3d_render_format, 64);
-			if (frame)
-			{
-				d3dRender_present(is->_d3dRender, frame->data, frame->linesize);
-			}
-		}
-#endif
 	}
 }
 
@@ -2601,13 +2562,6 @@ static int event_loop(void *lpParameter)
 		if (is->show_mode != SHOW_MODE_NONE && (!is->paused || is->force_refresh))
 			video_refresh(is, &remaining_time);
 	}
-#ifdef _WIN32
-	if (is->_d3dRender)
-	{
-		d3dRender_destory(is->_d3dRender);
-		is->_d3dRender = NULL;
-	}
-#endif
 	return 0;
 }
 
