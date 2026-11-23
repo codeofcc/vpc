@@ -84,6 +84,13 @@ file(GLOB_RECURSE SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 
+# fvp build fix: Windows-only sources (D3D renderer, DXVA2, SoundTouch via vcpkg)
+# are globbed unconditionally; exclude them on non-Windows hosts.
+if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+    list(FILTER SOURCES EXCLUDE REGEX "/d3dRender\\.c$")
+    list(FILTER SOURCES EXCLUDE REGEX "/ffmpeg_dxva2\\.c$")
+endif()
+
 add_library(${PROJECT_NAME} STATIC ${SOURCES})
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -120,7 +127,11 @@ endif()
 
 
 # ── 平台相关配置 ──
-if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+# 依赖获取方式：vcpkg 统一处理 Windows / Linux / macOS 以及 Android 交叉编译
+#   -DFVP_USE_VCPKG=OFF 可退回旧的非 Windows 方案（git clone SDL2 + 手编 ffmpeg）
+option(FVP_USE_VCPKG "Use vcpkg to fetch ffmpeg / SDL2 / SoundTouch" ON)
+
+if(FVP_USE_VCPKG)
 
 
     #    "-DCMAKE_SYSTEM_NAME=Android" ^
@@ -138,8 +149,18 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
         set(VCPKG_TARGET_TRIPLET "x86-android")
     elseif(ANDROID_ABI STREQUAL "x86_64")
         set(VCPKG_TARGET_TRIPLET "x64-android")
-    else()
+    elseif(WIN32)
         set(VCPKG_TARGET_TRIPLET "x64-windows-static-md")
+    elseif(APPLE)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+            set(VCPKG_TARGET_TRIPLET "arm64-osx")
+        else()
+            set(VCPKG_TARGET_TRIPLET "x64-osx")
+        endif()
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+        set(VCPKG_TARGET_TRIPLET "arm64-linux")
+    else()
+        set(VCPKG_TARGET_TRIPLET "x64-linux")
     endif()
 
     # message("VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}")
@@ -148,17 +169,35 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
     set(FFMPEG_VERSION_TAG "2026.07.29") # 👈 指定目标版本 8.1.2 //查看方式：在vcpkg的git查看ffmpeg包的版本对应的tag
     find_package(Git REQUIRED)
 
+    # 平台差异：Windows 用 bootstrap-vcpkg.bat / vcpkg.exe，其它平台用 .sh / vcpkg
+    if(WIN32)
+        set(_vcpkg_bootstrap "${VCPKG_DIR}/bootstrap-vcpkg.bat")
+        set(VCPKG_EXEC "${VCPKG_DIR}/vcpkg.exe")
+    else()
+        set(_vcpkg_bootstrap "${VCPKG_DIR}/bootstrap-vcpkg.sh")
+        set(VCPKG_EXEC "${VCPKG_DIR}/vcpkg")
+    endif()
+
     if(NOT EXISTS "${VCPKG_DIR}/scripts/buildsystems/vcpkg.cmake")
         execute_process(COMMAND ${GIT_EXECUTABLE} clone -b ${FFMPEG_VERSION_TAG} --depth=1 https://github.com/microsoft/vcpkg.git "${VCPKG_DIR}" COMMAND_ERROR_IS_FATAL ANY)
-        execute_process(COMMAND "${VCPKG_DIR}/bootstrap-vcpkg.bat" -disableMetrics WORKING_DIRECTORY "${VCPKG_DIR}" COMMAND_ERROR_IS_FATAL ANY)
+        execute_process(COMMAND "${_vcpkg_bootstrap}" -disableMetrics WORKING_DIRECTORY "${VCPKG_DIR}" COMMAND_ERROR_IS_FATAL ANY)
     endif()
     # 3. 注入 toolchain 并安装（保持 HEAD 最新状态）
     set(CMAKE_TOOLCHAIN_FILE "${VCPKG_DIR}/scripts/buildsystems/vcpkg.cmake" CACHE FILEPATH "")
+    set(VCPKG_TARGET_TRIPLET "${VCPKG_TARGET_TRIPLET}" CACHE STRING "" FORCE)
 
-
-    set(ENV{ANDROID_PLATFORM} "android-${ANDROID_NATIVE_API_LEVEL}")
+    if(ANDROID)
+        # vcpkg 的 *-android triplet 需要 NDK：优先沿用已有的 ANDROID_NDK
+        if(NOT DEFINED ENV{ANDROID_NDK_HOME} AND DEFINED ANDROID_NDK)
+            set(ENV{ANDROID_NDK_HOME} "${ANDROID_NDK}")
+        endif()
+        if(DEFINED ANDROID_NDK)
+            set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "${ANDROID_NDK}/build/cmake/android.toolchain.cmake" CACHE FILEPATH "" FORCE)
+        endif()
+        set(ENV{ANDROID_PLATFORM} "android-${ANDROID_NATIVE_API_LEVEL}")
+    endif()
     execute_process(
-        COMMAND "${VCPKG_DIR}/vcpkg.exe" install "ffmpeg[avcodec,avformat,swresample,swscale]:${VCPKG_TARGET_TRIPLET}"
+        COMMAND "${VCPKG_EXEC}" install "ffmpeg[avcodec,avformat,swresample,swscale]:${VCPKG_TARGET_TRIPLET}"
         WORKING_DIRECTORY "${VCPKG_DIR}"
         COMMAND_ECHO STDOUT
         COMMAND_ERROR_IS_FATAL ANY
@@ -181,7 +220,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
     # message(STATUS "ANDROID_NDK_HOME = $ENV{ANDROID_NDK_HOME}")
     # message(STATUS "ANDROID_NDK_HOME = ${ANDROID_NDK_HOME}")
     execute_process(
-        COMMAND "${VCPKG_DIR}/vcpkg.exe" install "sdl2:${VCPKG_TARGET_TRIPLET}"
+        COMMAND "${VCPKG_EXEC}" install "sdl2:${VCPKG_TARGET_TRIPLET}"
         WORKING_DIRECTORY "${VCPKG_DIR}"
         COMMAND_ECHO STDOUT
         COMMAND_ERROR_IS_FATAL ANY
@@ -196,7 +235,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
     )
 
     execute_process(
-        COMMAND "${VCPKG_DIR}/vcpkg.exe" install "soundtouch:${VCPKG_TARGET_TRIPLET}"
+        COMMAND "${VCPKG_EXEC}" install "soundtouch:${VCPKG_TARGET_TRIPLET}"
         WORKING_DIRECTORY "${VCPKG_DIR}"
         COMMAND_ECHO STDOUT
         COMMAND_ERROR_IS_FATAL ANY
