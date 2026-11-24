@@ -128,10 +128,8 @@ endif()
 
 # ── 平台相关配置 ──
 # 依赖获取方式：vcpkg 统一处理 Windows / Linux / macOS 以及 Android 交叉编译
-#   -DFVP_USE_VCPKG=OFF 可退回旧的非 Windows 方案（git clone SDL2 + 手编 ffmpeg）
-option(FVP_USE_VCPKG "Use vcpkg to fetch ffmpeg / SDL2 / SoundTouch" ON)
+# 所有平台统一走 vcpkg；已移除手编 ffmpeg / git clone SDL2 的旧分支。
 
-if(FVP_USE_VCPKG)
 
 
     #    "-DCMAKE_SYSTEM_NAME=Android" ^
@@ -220,7 +218,7 @@ if(FVP_USE_VCPKG)
     # message(STATUS "ANDROID_NDK_HOME = $ENV{ANDROID_NDK_HOME}")
     # message(STATUS "ANDROID_NDK_HOME = ${ANDROID_NDK_HOME}")
     execute_process(
-        COMMAND "${VCPKG_EXEC}" install "sdl2:${VCPKG_TARGET_TRIPLET}"
+        COMMAND "${VCPKG_EXEC}" install "sdl2[core]:${VCPKG_TARGET_TRIPLET}"
         WORKING_DIRECTORY "${VCPKG_DIR}"
         COMMAND_ECHO STDOUT
         COMMAND_ERROR_IS_FATAL ANY
@@ -249,214 +247,6 @@ if(FVP_USE_VCPKG)
     )
 
 
-else()
-
-    string(TOLOWER "${CMAKE_SYSTEM_NAME}" SYSTEM_NAME_LOWER)
-    # ── 下载 SDL2 ──
-    git_clone_if_needed(
-        "https://github.com/libsdl-org/SDL.git"
-        "release-2.30.12"
-        "${FFI_PACKAGE_DIR}/SDL2"
-    )
-
-    # ── SDL2 极简音频配置 ──
-    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-    set(SDL_STATIC ON CACHE BOOL "" FORCE)
-    set(SDL_TEST OFF CACHE BOOL "" FORCE)
-    set(SDL2_DISABLE_SDL2MAIN ON CACHE BOOL "" FORCE)
-    set(SDL2_DISABLE_UNINSTALL ON CACHE BOOL "" FORCE)
-    # 音频核心（必须）
-    set(SDL_AUDIO ON CACHE BOOL "" FORCE)
-
-    # 音频依赖（必须）
-    set(SDL_THREADS ON CACHE BOOL "" FORCE) # ⚠️ SDL 强制要求，不能关闭
-
-    set(SDL_IME OFF CACHE BOOL "" FORCE) # 禁用输入法框架 (IBus/Fcitx)
-    set(SDL_IBUS OFF CACHE BOOL "" FORCE) # 显式禁用 IBus
-    set(SDL_FCITX OFF CACHE BOOL "" FORCE) # 显式禁用 Fcitx
-    set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
-    # set(SDL_JOYSTICK OFF CACHE BOOL "" FORCE)
-
-    # 关闭其他不需要的模块
-    foreach(_sdl_mod
-        # EVENTS
-        FILE
-        MISC
-        TIMERS
-        ATOMIC
-        VIDEO RENDER HAPTIC SENSOR TOUCH POWER #JOYSTICK
-        DIRECTX OPENGLES VULKAN LOADSO CPUINFO
-        VIRTUAL_JOYSTICK RENDER_D3D LIBUDEV HIDAPI_JOYSTICK
-        FILESYSTEM LOCALE
-        # 各种音频后端（仅保留 WASAPI）
-        ALSA PULSEAUDIO JACK PIPEWIRE ESD ARTS NAS SNDIO FUSIONSOUND
-        # 各种平台
-        X11 WAYLAND DIRECTFB KMSDRM COCOA
-        DISKAUDIO
-        DUMMYAUDIO
-        DUMMYVIDEO
-        HIDAPI
-        OPENGL
-        OFFSCREEN
-        XINPUT
-        ALTIVEC
-        CCACHE
-    )
-        set(SDL_${_sdl_mod} OFF CACHE BOOL "" FORCE)
-    endforeach()
-
-    FetchContent_Declare(
-        SDL2
-        SOURCE_DIR "${FFI_PACKAGE_DIR}/SDL2"
-    )
-    FetchContent_MakeAvailable(SDL2)
-
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        SDL2::SDL2
-    )
-
-
-    #ffmpeg
-    if(NOT EXISTS "${FFMPEG_INSTALL_DIR}/lib/libavcodec.a")
-        message(STATUS "FFmpeg configuration 3: CMAKE_C_COMPILER=${CMAKE_C_COMPILER} CMAKE_C_COMPILER_TARGET=${CMAKE_C_COMPILER_TARGET} CMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} CMAKE_CXX_COMPILER_TARGET=${CMAKE_CXX_COMPILER_TARGET} CMAKE_SYSTEM_NAME =${CMAKE_SYSTEM_NAME}, CPU=${CMAKE_SYSTEM_PROCESSOR},")
-
-        include(ProcessorCount)
-        ProcessorCount(NPROC)
-        if(NPROC EQUAL 0)
-            set(NPROC 1)
-        endif()
-
-        # 路径变量
-        set(FFMPEG_INSTALL_DIR "${CMAKE_BINARY_DIR}/_deps/ffmpeg-build/install")
-        set(FFMPEG_SOURCE_DIR "${FFI_PACKAGE_DIR}/ffmpeg")
-
-        # ── 下载 FFmpeg ──
-        git_clone_if_needed(
-            "https://git.ffmpeg.org/ffmpeg.git"
-            "n8.1.2"
-            "${FFMPEG_SOURCE_DIR}"
-        )
-
-        message(STATUS "[OS] Target OS matches host: ${CMAKE_HOST_SYSTEM_PROCESSOR} ${CMAKE_SYSTEM_PROCESSOR}")
-        if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL CMAKE_SYSTEM_PROCESSOR)
-            message(STATUS "[OS] Target OS matches host: ${CMAKE_SYSTEM_NAME}")
-            set(FFMPEG_CROSS_COMPILE "--disable-cross-compile")
-        else()
-            set(FFMPEG_CROSS_COMPILE "--enable-cross-compile")
-            set(FFMPEG_COMPILER_FLAGS "--target=${CMAKE_C_COMPILER_TARGET}")
-            set(FFMPEG_CROSS_PREFIX "${CMAKE_C_COMPILER_TARGET}-")
-            message(STATUS "[OS] Target OS differs from host: ${CMAKE_HOST_SYSTEM_NAME} -> ${CMAKE_SYSTEM_NAME}")
-            if(NOT FFMPEG_TARGET_ARCH AND CMAKE_C_COMPILER_TARGET)
-                string(REGEX MATCH "^([^-]+)" TRIPLE_ARCH "${CMAKE_C_COMPILER_TARGET}")
-                if(TRIPLE_ARCH MATCHES "aarch64|arm64")
-                    set(FFMPEG_TARGET_ARCH "arm64")
-                    set(IS_ARM64 TRUE)
-                elseif(TRIPLE_ARCH MATCHES "^arm")
-                    set(FFMPEG_TARGET_ARCH "arm")
-                    set(IS_ARM TRUE)
-                elseif(TRIPLE_ARCH MATCHES "x86_64|amd64")
-                    set(FFMPEG_TARGET_ARCH "x86_64")
-                    set(IS_X86_64 TRUE)
-                elseif(TRIPLE_ARCH MATCHES "i[3-6]86")
-                    set(FFMPEG_TARGET_ARCH "x86")
-                    set(IS_X86 TRUE)
-                else()
-                    set(FFMPEG_TARGET_ARCH "${TRIPLE_ARCH}")
-                endif()
-            endif()
-        endif()
-
-        # 下载并构建
-        include(ExternalProject)
-        ExternalProject_Add(ffmpeg
-            BUILD_ALWAYS OFF
-            # UPDATE_COMMAND ""
-            # UPDATE_DISCONNECTED ON
-            SOURCE_DIR "${FFMPEG_SOURCE_DIR}"
-            BINARY_DIR "${CMAKE_BINARY_DIR}/_deps/ffmpeg-build"
-            PREFIX "${FFMPEG_INSTALL_DIR}"
-            #   GIT_REPOSITORY "https://git.ffmpeg.org/ffmpeg.git"
-            #   GIT_TAG "n8.1.2"
-            #   GIT_SHALLOW TRUE
-            CONFIGURE_COMMAND
-            #${CMAKE_COMMAND} -E echo "FFmpeg configure skipped (using pre-built libraries)"
-            ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER}
-            C_INCLUDE_PATH=$ENV{CPLUS_INCLUDE_PATH}
-            ${FFMPEG_SOURCE_DIR}/configure
-            --prefix=${FFMPEG_INSTALL_DIR}
-            "--cc=${CMAKE_C_COMPILER} ${FFMPEG_COMPILER_FLAGS}"
-            --arch=${FFMPEG_TARGET_ARCH}
-            # --cpu=${FFMPEG_TARGET_ARCH}
-            --cross-prefix=${FFMPEG_CROSS_PREFIX}
-            ${FFMPEG_CROSS_COMPILE}
-            --sysroot=${CMAKE_SYSROOT}
-            --target-os=${SYSTEM_NAME_LOWER}
-            # === 核心策略 ===
-            --disable-everything
-            --disable-autodetect # ← 防止隐式依赖
-            --disable-shared --enable-static
-            --disable-programs # 不构建 ffmpeg/ffprobe/ffplay
-            --disable-doc
-            # === 移除无用子系统 ===
-            --disable-encoders --disable-muxers --disable-bsfs
-            --disable-filters
-            --disable-indevs --disable-outdevs
-            # === 移除外部库依赖 ===
-            --disable-iconv --disable-zlib --disable-bzlib --disable-lzma
-            --disable-sdl2 --disable-xlib #--disable-xcb
-            --disable-alsa --disable-sndio #--disable-pulseaudio --disable-jack
-            # === 移除平台特定硬件加速 ===
-            --disable-vaapi --disable-vdpau
-            --disable-cuda --disable-cuvid --disable-nvenc --disable-nvdec
-            --disable-amf --disable-d3d11va --disable-dxva2
-            --disable-videotoolbox --disable-audiotoolbox
-            --disable-mediacodec
-            --disable-v4l2-m2m #--disable-v4l2
-            #禁用
-            --disable-asm
-            # === 保留的功能 ===
-            --enable-network --enable-protocols
-            --enable-demuxers --enable-parsers
-            --enable-decoders --enable-hwaccels
-            --enable-swscale --enable-swresample
-            #静态库
-            --disable-shared --enable-static
-            # --pkg-config=pkg-config --pkg-config-flags=--static
-            --enable-pic
-            # === 编译选项 ===
-            "--extra-cflags=-fPIC $<$<CONFIG:Debug>:-g -O0 -DDEBUG>$<$<CONFIG:RelWithDebInfo>:-g -O2 -DNDEBUG>$<$<CONFIG:MinSizeRel>:-Os -DNDEBUG>$<$<NOT:$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>>:-O2 -DNDEBUG>"
-            $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:--enable-debug>$<$<NOT:$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>>:--disable-debug>
-
-
-            BUILD_COMMAND make -j${NPROC}
-
-            INSTALL_COMMAND make install
-
-            BUILD_BYPRODUCTS
-            "${FFMPEG_INSTALL_DIR}/lib/libavcodec.a"
-            "${FFMPEG_INSTALL_DIR}/lib/libavformat.a"
-            "${FFMPEG_INSTALL_DIR}/lib/libavutil.a"
-            "${FFMPEG_INSTALL_DIR}/lib/libswscale.a"
-            "${FFMPEG_INSTALL_DIR}/lib/libswresample.a"
-        )
-
-        add_dependencies(${PROJECT_NAME} ffmpeg)
-
-    endif()
-    list(APPEND INCLUDE_DIRS
-        ${FFMPEG_INSTALL_DIR}/include
-    )
-
-    list(APPEND LIBRARIES
-        ${FFMPEG_INSTALL_DIR}/lib/libavformat.a
-        ${FFMPEG_INSTALL_DIR}/lib/libavcodec.a
-        ${FFMPEG_INSTALL_DIR}/lib/libswscale.a
-        ${FFMPEG_INSTALL_DIR}/lib/libswresample.a
-        ${FFMPEG_INSTALL_DIR}/lib/libavutil.a
-    )
-
-
-endif()
 
 
 target_include_directories(${PROJECT_NAME} PRIVATE
